@@ -527,7 +527,7 @@ class TradingAlgorithm:
         before_trading_start_minutes = days_at_time(
             self.sim_params.sessions,
             before_trading_time,
-            self.trading_calendar.tz.zone,
+            str(self.trading_calendar.tz),
             day_offset=0,
         )
 
