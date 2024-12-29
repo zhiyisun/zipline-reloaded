@@ -3,11 +3,17 @@ name: PyPI
 on:
   workflow_dispatch:
     inputs:
-      publish_to_pypi:
-        description: 'Publish to PyPI?'
+      target:
+        type: choice
+        description: 'Package Index'
         required: true
-        type: boolean
-        default: false
+        default: 'TESTPYPI'
+        options: [ 'TESTPYPI', 'PYPI' ]
+      version:
+        type: string
+        description: 'Version tag'
+        required: true
+        default: '3.1'
 
 jobs:
   build_wheels:
@@ -17,19 +23,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-latest , windows-latest, macos-latest ]
-        python: [ "cp38", "cp39", "cp310", "cp311" ]
+        python: [ "cp39", "cp310", "cp311", "cp312" ]
         arch: [ auto64 ]
 
     steps:
       - name: Checkout zipline
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-#      - name: Setup Python
-#        uses: actions/setup-python@v4
-#        with:
-#          python-version: ${{ matrix.python }}
+          fetch-tags: true
+          ref: ${{ github.event.inputs.version }}
 
       - name: Set Xcode version
         uses: maxim-lobanov/setup-xcode@v1
@@ -39,10 +42,8 @@ jobs:
 
       - name: Wheels macOS / Linux
         if: runner.os != 'Windows'
-        uses: pypa/cibuildwheel@v2.14.1
+        uses: pypa/cibuildwheel@v2.21.1
         env:
-          CIBW_BEFORE_ALL_LINUX: ./tools/install_talib.sh
-          CIBW_BEFORE_ALL_MACOS: brew install ta-lib
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_ARCHS_MACOS: x86_64 arm64
           CIBW_BUILD: "${{ matrix.python }}-*"
@@ -56,61 +57,66 @@ jobs:
 
       - name: Wheels Windows
         if: runner.os == 'Windows'
-        uses: pypa/cibuildwheel@v2.14.1
+        uses: pypa/cibuildwheel@v2.21.1
         env:
           CIBW_BUILD: "${{ matrix.python }}-win_amd64"
-          CIBW_BEFORE_TEST_WINDOWS: >
-            call "c:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64 &&
-            call ./tools/install_talib.bat
 
       - name: Store artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: my-artifact-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.arch }}.whl
           path: ./wheelhouse/*.whl
-
 
   build_sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.inputs.version }}
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         name: Install Python
         with:
           python-version: '3.11'
-
       - name: Build sdist
         run: |
           pip install -U pip setuptools build
           python -m build --sdist
-
-      - uses: actions/upload-artifact@v3
+      - name: upload sdist
+        uses: actions/upload-artifact@v4
         with:
-          path: dist/*.tar.gz
+          name: my-artifact-sdist
+          path: ./dist/*.tar.gz
 
   upload_pypi:
     needs: [ build_wheels, build_sdist ]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v3
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: artifact
-          path: dist
-
-      - name: publish to testpypi
+          pattern: my-artifact-*
+          path: artifacts/
+          merge-multiple: true
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+      - name: Publish to PyPI
+        if: ${{ github.event.inputs.target  == 'PYPI' }}
         uses: pypa/gh-action-pypi-publish@release/v1
-        if: ${{ inputs.publish_to_pypi == false }}
-        with:
-          user: __token__
-          password: ${{ secrets.TESTPYPI_TOKEN }}
-          repository_url: https://test.pypi.org/legacy/
-
-      - name: publish to pypi
-        uses: pypa/gh-action-pypi-publish@release/v1
-        if: ${{ inputs.publish_to_pypi == true }}
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}
+          packages-dir: artifacts/
+      - name: Publish to PyPI - Test
+        if: ${{ github.event.inputs.target  == 'TESTPYPI' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.TESTPYPI_TOKEN }}
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          verbose: true
+          packages-dir: artifacts/

@@ -1,11 +1,12 @@
 """
 Tests for Factor terms.
 """
+
 import re
+import sys
 from functools import partial
 from itertools import product
 from unittest import skipIf
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,7 +15,6 @@ from numpy.random import randn, seed
 from parameterized import parameterized
 from scipy.stats.mstats import winsorize as scipy_winsorize
 from toolz import compose
-
 from zipline.errors import BadPercentileBounds, UnknownRankMethod
 from zipline.lib.labelarray import LabelArray
 from zipline.lib.normalize import naive_grouped_rowwise_apply as grouped_apply
@@ -40,6 +40,17 @@ from zipline.utils.numpy_utils import (
 from zipline.utils.pandas_utils import new_pandas, skip_pipeline_new_pandas
 
 from .base import BaseUSEquityPipelineTestCase
+from packaging.version import Version
+
+from .test_statistical import ON_GITHUB_ACTIONS
+
+NUMPY2 = Version(np.__version__) >= Version("2.0.0")
+
+pandas_two_point_two = False
+if Version(pd.__version__) >= Version("2.2"):
+    # pandas 2.2.0 has a bug in qcut that causes it to return a Series with
+    # the wrong dtype when labels=False.
+    pandas_two_point_two = True
 
 
 class F(Factor):
@@ -1466,6 +1477,8 @@ class FactorTestCase(BaseUSEquityPipelineTestCase):
             mask=self.build_mask(self.ones_mask(shape=shape)),
         )
 
+    # skip until https://github.com/pandas-dev/pandas/issues/58240 fixed
+    @skipIf(pandas_two_point_two, "pd.qcut has a bug in pandas 2.2")
     def test_quantiles_uneven_buckets(self):
         permute = partial(permute_rows, 5)
         shape = (5, 5)
@@ -1724,7 +1737,9 @@ class TestSpecialCases(WithUSEquityPricingPipelineEngine, ZiplineTestCase):
 
 
 class SummaryTestCase(BaseUSEquityPipelineTestCase, ZiplineTestCase):
-    @pytest.mark.filterwarnings("ignore", module=np.lib.nanfunctions)
+    @pytest.mark.filterwarnings(
+        "ignore", module=np.lib._nanfunctions_impl if NUMPY2 else np.lib.nanfunctions
+    )
     @parameter_space(
         seed=[1, 2, 3],
         mask=[
@@ -1807,7 +1822,9 @@ class SummaryTestCase(BaseUSEquityPipelineTestCase, ZiplineTestCase):
         assert_equal(result["demean"], result["alt_demean"])
         assert_equal(result["zscore"], result["alt_zscore"])
 
-    @pytest.mark.filterwarnings("ignore", module=np.lib.nanfunctions)
+    @pytest.mark.filterwarnings(
+        "ignore", module=np.lib._nanfunctions_impl if NUMPY2 else np.lib.nanfunctions
+    )
     @parameter_space(
         seed=[100, 200, 300],
         mask=[
@@ -1842,7 +1859,9 @@ class SummaryTestCase(BaseUSEquityPipelineTestCase, ZiplineTestCase):
             mask=self.build_mask(np.ones(shape)),
         )
 
-    @pytest.mark.filterwarnings("ignore", module=np.lib.nanfunctions)
+    @pytest.mark.filterwarnings(
+        "ignore", module=np.lib._nanfunctions_impl if NUMPY2 else np.lib.nanfunctions
+    )
     @parameter_space(
         seed=[40, 41, 42],
         mask=[
