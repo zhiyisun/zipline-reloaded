@@ -30,7 +30,7 @@ from zipline.utils.cli import maybe_show_progress
 from zipline.utils.functional import apply
 from zipline.utils.input_validation import expect_element
 from zipline.utils.memoize import lazyval
-from zipline.utils.numpy_utils import float64_dtype, iNaT, uint32_dtype
+from zipline.utils.numpy_utils import float64_dtype, iNaT, uint32_dtype, uint64_dtype
 
 from ._equities import _compute_row_slices, _read_bcolz_data
 
@@ -65,46 +65,75 @@ def winsorise_uint32(df, invalid_data_behavior, column, *columns):
         The dataframe to winsorise.
     invalid_data_behavior : {'warn', 'raise', 'ignore'}
         What to do when data is outside the bounds of a uint32.
+    column : str
+        The name of the first column to check.
     *columns : iterable[str]
-        The names of the columns to check.
+        Additional names of the columns to check.
 
     Returns
     -------
     truncated : pd.DataFrame
         ``df`` with values that do not fit into a uint32 zeroed out.
     """
-    columns = list((column,) + columns)
-    mask = df[columns] > UINT32_MAX
+    all_columns = [column] + list(columns)
+    # Exclude 'volume' from uint32 checking since it can legitimately exceed uint32 limits
+    columns_to_check = [col for col in all_columns if col != 'volume']
 
-    if invalid_data_behavior != "ignore":
-        mask |= df[columns].isnull()
+    if columns_to_check:
+        # Create boolean mask for values that exceed uint32 max
+        mask = df[columns_to_check] > UINT32_MAX
+
+        if invalid_data_behavior != "ignore":
+            # Add null values to the mask if we're not ignoring them
+            null_mask = df[columns_to_check].isnull()
+            mask = mask | null_mask
+        else:
+            # we are not going to generate a warning or error for this so just use
+            # nan_to_num
+            df[columns_to_check] = np.nan_to_num(df[columns_to_check])
+
+        # Check if any values need to be winsorized
+        mv = mask.values
+        if mv.any():
+            if invalid_data_behavior == "raise":
+                raise ValueError(
+                    "%d values out of bounds for uint32: %r"
+                    % (
+                        mv.sum(),
+                        df[mask.any(axis=1)][columns_to_check],
+                    ),
+                )
+            if invalid_data_behavior == "warn":
+                warnings.warn(
+                    "Ignoring %d values because they are out of bounds for"
+                    " uint32:\n %r"
+                    % (
+                        mv.sum(),
+                        df[mask.any(axis=1)][columns_to_check],
+                    ),
+                    stacklevel=3,  # one extra frame for `expect_element`
+                )
+
+            # Apply winsorization by setting out-of-bounds values to 0
+            # Use integer indexing to avoid the character issue
+            for col in columns_to_check:
+                col_mask = mask[col]
+                df.loc[col_mask, col] = 0
     else:
-        # we are not going to generate a warning or error for this so just use
-        # nan_to_num
-        df[columns] = np.nan_to_num(df[columns])
+        # If only volume was passed, still need to handle null values if needed
+        if invalid_data_behavior != "ignore":
+            volume_mask = df[['volume']].isnull()
+            if volume_mask.any().any():
+                if invalid_data_behavior == "raise":
+                    raise ValueError(
+                        "Null values found in volume column"
+                    )
+                if invalid_data_behavior == "warn":
+                    warnings.warn(
+                        "Null values found in volume column",
+                        stacklevel=3,
+                    )
 
-    mv = mask.values
-    if mv.any():
-        if invalid_data_behavior == "raise":
-            raise ValueError(
-                "%d values out of bounds for uint32: %r"
-                % (
-                    mv.sum(),
-                    df[mask.any(axis=1)],
-                ),
-            )
-        if invalid_data_behavior == "warn":
-            warnings.warn(
-                "Ignoring %d values because they are out of bounds for"
-                " uint32:\n %r"
-                % (
-                    mv.sum(),
-                    df[mask.any(axis=1)],
-                ),
-                stacklevel=3,  # one extra frame for `expect_element`
-            )
-
-    df[mask] = 0
     return df
 
 
@@ -232,10 +261,13 @@ class BcolzDailyBarWriter:
         calendar_offset = {}
 
         # Maps column name -> output carray.
-        columns = {
-            k: carray(np.array([], dtype=uint32_dtype))
-            for k in US_EQUITY_PRICING_BCOLZ_COLUMNS
-        }
+        # Volume column needs to be uint64 to handle large values
+        columns = {}
+        for k in US_EQUITY_PRICING_BCOLZ_COLUMNS:
+            if k == 'volume':
+                columns[k] = carray(np.array([], dtype=uint64_dtype))
+            else:
+                columns[k] = carray(np.array([], dtype=uint32_dtype))
 
         earliest_date = None
         sessions = self._calendar.sessions_in_range(
@@ -338,12 +370,14 @@ class BcolzDailyBarWriter:
             # we already have a ctable so do nothing
             return raw_data
 
+        # Process OHLC prices separately from volume since volume can exceed uint32 limits
         winsorise_uint32(raw_data, invalid_data_behavior, "volume", *OHLC)
         processed = (raw_data[list(OHLC)] * 1000).round().astype("uint32")
         dates = raw_data.index.values.astype("datetime64[s]")
         check_uint32_safe(dates.max().view(np.int64), "day")
         processed["day"] = dates.astype("uint32")
-        processed["volume"] = raw_data.volume.astype("uint32")
+        # Handle volume separately as uint64 to accommodate large volume values
+        processed["volume"] = raw_data.volume.astype("uint64")
         return ctable.fromdataframe(processed)
 
 

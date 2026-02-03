@@ -29,6 +29,7 @@ from numpy cimport (
     intp_t,
     ndarray,
     uint32_t,
+    uint64_t,
     uint8_t,
 )
 from libc.math cimport NAN
@@ -178,8 +179,10 @@ cpdef _read_bcolz_data(ctable_t table,
         int nassets
         str column_name
         carray_t carray
-        ndarray[dtype=uint32_t, ndim=1] raw_data
-        ndarray[dtype=uint32_t, ndim=2] outbuf
+        ndarray[dtype=uint32_t, ndim=1] raw_data_uint32
+        ndarray[dtype=uint64_t, ndim=1] raw_data_uint64
+        ndarray[dtype=uint32_t, ndim=2] outbuf_uint32
+        ndarray[dtype=uint64_t, ndim=2] outbuf_uint64
         ndarray[dtype=uint8_t, ndim=2, cast=True] where_nan
         ndarray[dtype=float64_t, ndim=2] outbuf_as_float
         intp_t asset
@@ -196,48 +199,85 @@ cpdef _read_bcolz_data(ctable_t table,
         raise ValueError("Incompatible index arrays.")
 
     for column_name in columns:
-        outbuf = zeros(shape=shape, dtype=uint32)
-        if read_all:
-            raw_data = table[column_name][:]
+        if column_name == 'volume':
+            # Handle volume as uint64 to accommodate large values
+            outbuf_uint64 = zeros(shape=shape, dtype=uint64)
+            if read_all:
+                raw_data_uint64 = table[column_name][:]
 
-            for asset in range(nassets):
-                first_row = first_rows[asset]
-                if first_row == -1:
-                    # This is an unknown asset, leave its slot empty.
-                    continue
+                for asset in range(nassets):
+                    first_row = first_rows[asset]
+                    if first_row == -1:
+                        # This is an unknown asset, leave its slot empty.
+                        continue
 
-                last_row = last_rows[asset]
-                offset = offsets[asset]
+                    last_row = last_rows[asset]
+                    offset = offsets[asset]
 
-                if first_row <= last_row:
-                    outbuf[offset:offset + (last_row + 1 - first_row), asset] =\
-                        raw_data[first_row:last_row + 1]
-                else:
-                    continue
+                    if first_row <= last_row:
+                        outbuf_uint64[offset:offset + (last_row + 1 - first_row), asset] =\
+                            raw_data_uint64[first_row:last_row + 1]
+                    else:
+                        continue
+            else:
+                carray = table[column_name]
+
+                for asset in range(nassets):
+                    first_row = first_rows[asset]
+                    if first_row == -1:
+                        # This is an unknown asset, leave its slot empty.
+                        continue
+
+                    last_row = last_rows[asset]
+                    offset = offsets[asset]
+                    if first_row <= last_row:
+                        outbuf_uint64[offset:offset + (last_row + 1 - first_row), asset] =\
+                            carray[first_row:last_row + 1]
+                    else:
+                        continue
+            results.append(outbuf_uint64)
         else:
-            carray = table[column_name]
+            # Handle other columns as uint32
+            outbuf_uint32 = zeros(shape=shape, dtype=uint32)
+            if read_all:
+                raw_data_uint32 = table[column_name][:]
 
-            for asset in range(nassets):
-                first_row = first_rows[asset]
-                if first_row == -1:
-                    # This is an unknown asset, leave its slot empty.
-                    continue
+                for asset in range(nassets):
+                    first_row = first_rows[asset]
+                    if first_row == -1:
+                        # This is an unknown asset, leave its slot empty.
+                        continue
 
-                last_row = last_rows[asset]
-                offset = offsets[asset]
-                out_start = offset
-                out_end = (last_row - first_row) + offset + 1
-                if first_row <= last_row:
-                    outbuf[offset:offset + (last_row + 1 - first_row), asset] =\
-                        carray[first_row:last_row + 1]
-                else:
-                    continue
+                    last_row = last_rows[asset]
+                    offset = offsets[asset]
 
-        if column_name in {'open', 'high', 'low', 'close'}:
-            where_nan = (outbuf == 0)
-            outbuf_as_float = outbuf.astype(float64) * .001
-            outbuf_as_float[where_nan] = NAN
-            results.append(outbuf_as_float)
-        else:
-            results.append(outbuf)
+                    if first_row <= last_row:
+                        outbuf_uint32[offset:offset + (last_row + 1 - first_row), asset] =\
+                            raw_data_uint32[first_row:last_row + 1]
+                    else:
+                        continue
+            else:
+                carray = table[column_name]
+
+                for asset in range(nassets):
+                    first_row = first_rows[asset]
+                    if first_row == -1:
+                        # This is an unknown asset, leave its slot empty.
+                        continue
+
+                    last_row = last_rows[asset]
+                    offset = offsets[asset]
+                    if first_row <= last_row:
+                        outbuf_uint32[offset:offset + (last_row + 1 - first_row), asset] =\
+                            carray[first_row:last_row + 1]
+                    else:
+                        continue
+
+            if column_name in {'open', 'high', 'low', 'close'}:
+                where_nan = (outbuf_uint32 == 0)
+                outbuf_as_float = outbuf_uint32.astype(float64) * .001
+                outbuf_as_float[where_nan] = NAN
+                results.append(outbuf_as_float)
+            else:
+                results.append(outbuf_uint32)
     return results

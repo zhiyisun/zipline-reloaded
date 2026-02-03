@@ -164,6 +164,13 @@ def coerce_to_uint32(a, scaling_factor):
     return (a * scaling_factor).round().astype("uint32")
 
 
+def coerce_volume_to_uint64(a, scaling_factor):
+    """
+    Returns a copy of the volume array as uint64 to accommodate large values.
+    """
+    return (a * scaling_factor).round().astype("uint64")
+
+
 def days_and_sids_for_frames(frames):
     """
     Returns the date index and sid columns shared by a list of dataframes,
@@ -399,10 +406,16 @@ class HDF5DailyBarWriter:
             frame.sort_index(inplace=True)
             frame.sort_index(axis="columns", inplace=True)
 
-            data = coerce_to_uint32(
-                frame.T.fillna(0).values,
-                scaling_factors[field],
-            )
+            if field == VOLUME:
+                data = coerce_volume_to_uint64(
+                    frame.T.fillna(0).values,
+                    scaling_factors[field],
+                )
+            else:
+                data = coerce_to_uint32(
+                    frame.T.fillna(0).values,
+                    scaling_factors[field],
+                )
 
             dataset = data_group.create_dataset(
                 field,
