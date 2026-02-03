@@ -476,7 +476,7 @@ class EarningsEstimatesLoader(PipelineLoader):
 
         col_to_all_adjustments = {}
         sid_to_idx = dict(zip(assets, range(len(assets))))
-        quarter_shifts.groupby(level=SID_FIELD_NAME).apply(
+        quarter_shifts.groupby(level=SID_FIELD_NAME, include_groups=False).apply(
             self.get_adjustments_for_sid,
             dates,
             requested_qtr_data,
