@@ -22,6 +22,7 @@ from numpy import (
     full,
     intp,
     uint32,
+    uint64,
     zeros,
 )
 from numpy cimport (
